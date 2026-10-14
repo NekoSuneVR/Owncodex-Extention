@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 const execCommand = promisify(execCallback);
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+type PlatformId = 'ollama-local' | 'ollama-cloud' | 'lm-studio' | 'omniroute' | 'openai' | 'openrouter' | 'anthropic-compatible' | 'gemini-compatible' | 'groq' | 'deepseek' | 'mistral' | 'xai' | 'together' | 'fireworks' | 'cerebras' | 'sambanova' | 'nvidia' | 'huggingface' | 'localai' | 'vllm' | 'llamacpp' | 'koboldcpp' | 'custom';
 type WebviewRequest =
   | { type: 'chat'; text: string; history: ChatMessage[] }
   | { type: 'search'; query: string }
@@ -12,7 +13,8 @@ type WebviewRequest =
   | { type: 'transcribe'; audioBase64: string; mimeType: string }
   | { type: 'speak'; text: string }
   | { type: 'insertSelection' }
-  | { type: 'providerChanged'; provider: 'ollama' | 'omniroute' | 'openai-compatible' };
+  | { type: 'providerChanged'; provider: PlatformId }
+  | { type: 'voiceSettingsChanged'; transcriptionProvider: 'openai-compatible' | 'vosk-http'; ttsMode: 'piper-http' | 'openai-compatible' };
 
 class CodexViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -24,9 +26,18 @@ class CodexViewProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage(async (message: WebviewRequest) => {
       try {
-        if (message.type === 'providerChanged') {
+        if ((message as any).type === 'ready') {
+          view.webview.postMessage({ type:'initialSettings', provider:cfg().get<string>('provider','ollama-local'), transcriptionProvider:cfg().get<string>('voice.transcriptionProvider','openai-compatible'), ttsMode:cfg().get<string>('voice.ttsMode','piper-http') });
+        } else if (message.type === 'providerChanged') {
           await cfg().update('provider', message.provider, vscode.ConfigurationTarget.Global);
+          const preset = platformPresets[message.provider];
+          if (preset?.baseUrl) await cfg().update('api.baseUrl', preset.baseUrl, vscode.ConfigurationTarget.Global);
+          if (preset?.model) await cfg().update('api.model', preset.model, vscode.ConfigurationTarget.Global);
           view.webview.postMessage({ type: 'providerSaved', provider: message.provider });
+        } else if (message.type === 'voiceSettingsChanged') {
+          await cfg().update('voice.transcriptionProvider', message.transcriptionProvider, vscode.ConfigurationTarget.Global);
+          await cfg().update('voice.ttsMode', message.ttsMode, vscode.ConfigurationTarget.Global);
+          view.webview.postMessage({ type: 'voiceSettingsSaved' });
         } else if (message.type === 'chat') {
           const answer = await chat(message.text, message.history);
           view.webview.postMessage({ type: 'chatResult', text: answer });
@@ -68,7 +79,8 @@ class CodexViewProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 <header><h1>NekoSune Codex</h1>
-<div class="toolbar"><select id="provider"><option value="ollama">Ollama (local)</option><option value="omniroute">OmniRoute</option><option value="openai-compatible">OpenAI-compatible</option></select><button id="clear">New chat</button></div>
+<div class="toolbar"><select id="provider" aria-label="AI platform"><option value="ollama-local">Ollama (local)</option><option value="ollama-cloud">Ollama Cloud</option><option value="lm-studio">LM Studio (local)</option><option value="omniroute">OmniRoute gateway</option><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option><option value="anthropic-compatible">Claude / Anthropic-compatible gateway</option><option value="gemini-compatible">Gemini-compatible gateway</option><option value="groq">Groq</option><option value="deepseek">DeepSeek</option><option value="mistral">Mistral</option><option value="xai">xAI / Grok</option><option value="together">Together AI</option><option value="fireworks">Fireworks AI</option><option value="cerebras">Cerebras</option><option value="sambanova">SambaNova</option><option value="nvidia">NVIDIA NIM</option><option value="huggingface">Hugging Face</option><option value="localai">LocalAI</option><option value="vllm">vLLM</option><option value="llamacpp">llama.cpp server</option><option value="koboldcpp">KoboldCpp</option><option value="custom">Custom OpenAI-compatible API</option></select><button id="clear">New chat</button></div>
+<div class="toolbar" style="margin-top:6px"><select id="transcriber" aria-label="Speech recognition"><option value="openai-compatible">Whisper / OpenAI-compatible transcription</option><option value="vosk-http">Vosk local HTTP adapter</option></select><select id="speechEngine" aria-label="Text to speech"><option value="piper-http">Piper local TTS</option><option value="openai-compatible">OpenAI-compatible TTS</option></select><button id="saveVoice">Save voice</button></div>
 <div class="hint">Chat, code help, web research, image generation and voice. Configure endpoints in Settings.</div></header>
 <div id="messages"><div class="message"><div class="role">Welcome</div>Ask a coding question, research documentation, generate an image, or use the microphone to dictate a prompt.</div></div>
 <div id="status" class="status">Ready</div>
@@ -79,13 +91,15 @@ class CodexViewProvider implements vscode.WebviewViewProvider {
 const vscode = acquireVsCodeApi();
 const messagesEl=document.getElementById('messages'), statusEl=document.getElementById('status'), promptEl=document.getElementById('prompt');
 let history=[],lastReply='',recorder,recordedChunks=[];
+window.addEventListener('DOMContentLoaded',()=>vscode.postMessage({type:'ready'}));
 function status(t){statusEl.textContent=t}
 function addMessage(role,text){const card=document.createElement('div');card.className='message '+role;const label=document.createElement('div');label.className='role';label.textContent=role;const body=document.createElement('div');body.textContent=text;card.append(label,body);messagesEl.appendChild(card);card.scrollIntoView({block:'end'});return body}
 function send(){const text=promptEl.value.trim();if(!text)return;promptEl.value='';addMessage('user',text);history.push({role:'user',content:text});status('Thinking…');vscode.postMessage({type:'chat',text,history:history.slice(-20)})}
 document.getElementById('send').addEventListener('click',send);
 promptEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();send()}});
 document.getElementById('clear').addEventListener('click',()=>{history=[];lastReply='';messagesEl.replaceChildren();status('New conversation')});
-document.getElementById('provider').addEventListener('change',e=>vscode.postMessage({type:'providerChanged',provider:e.target.value}));
+document.getElementById('provider').addEventListener('change',e=>{status('Switching platform…');vscode.postMessage({type:'providerChanged',provider:e.target.value})});
+document.getElementById('saveVoice').addEventListener('click',()=>{vscode.postMessage({type:'voiceSettingsChanged',transcriptionProvider:document.getElementById('transcriber').value,ttsMode:document.getElementById('speechEngine').value});status('Saving voice settings…')});
 document.getElementById('search').addEventListener('click',()=>{const query=promptEl.value.trim();if(!query){status('Enter a search query first');return}status('Searching web…');vscode.postMessage({type:'search',query})});
 document.getElementById('image').addEventListener('click',()=>{const prompt=promptEl.value.trim();if(!prompt){status('Enter an image prompt first');return}status('Generating image…');vscode.postMessage({type:'generateImage',prompt})});
 document.getElementById('speak').addEventListener('click',()=>{if(!lastReply){status('There is no reply to read yet');return}status('Generating speech…');vscode.postMessage({type:'speak',text:lastReply})});
@@ -95,7 +109,10 @@ document.getElementById('mic').addEventListener('click',async()=>{
  catch(e){status('Microphone unavailable: '+e.message)}
 });
 window.addEventListener('message',event=>{const m=event.data;
- if(m.type==='chatResult'){lastReply=m.text;history.push({role:'assistant',content:m.text});addMessage('assistant',m.text);status('Ready')}
+ if(m.type==='initialSettings'){document.getElementById('provider').value=m.provider;document.getElementById('transcriber').value=m.transcriptionProvider;document.getElementById('speechEngine').value=m.ttsMode}
+ else if(m.type==='providerSaved'){document.getElementById('provider').value=m.provider;status('AI platform selected. Set its model and API key in Settings if needed.')}
+ else if(m.type==='voiceSettingsSaved'){status('Voice settings saved')}
+ else if(m.type==='chatResult'){lastReply=m.text;history.push({role:'assistant',content:m.text});addMessage('assistant',m.text);status('Ready')}
  else if(m.type==='searchResult'){addMessage('assistant','Web search results\n'+m.text);status('Search complete')}
  else if(m.type==='imageResult'){addMessage('assistant','Image generated'+(m.url?'\n'+m.url:''));if(m.data){const img=document.createElement('img');img.className='generated';img.alt='Generated image';img.src='data:'+(m.mimeType||'image/png')+';base64,'+m.data;messagesEl.lastChild.appendChild(img)}status('Image generation complete')}
  else if(m.type==='transcriptionResult'){promptEl.value=(promptEl.value?promptEl.value+' ':'')+m.text;status('Transcription complete')}
@@ -111,6 +128,30 @@ window.addEventListener('message',event=>{const m=event.data;
 function getNonce(): string { return Array.from({length: 32}, () => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.charAt(Math.floor(Math.random()*62))).join(''); }
 
 function cfg() { return vscode.workspace.getConfiguration('nekosuneCodex'); }
+
+const platformPresets: Partial<Record<PlatformId, {baseUrl:string;model:string}>> = {
+  'ollama-cloud': {baseUrl:'https://ollama.com/v1',model:'gemma4:31b'},
+  'lm-studio': {baseUrl:'http://127.0.0.1:1234/v1',model:'local-model'},
+  omniroute: {baseUrl:'http://127.0.0.1:20128/v1',model:'openai/gpt-4.1-mini'},
+  openai: {baseUrl:'https://api.openai.com/v1',model:'gpt-4.1-mini'},
+  openrouter: {baseUrl:'https://openrouter.ai/api/v1',model:'openai/gpt-4.1-mini'},
+  groq: {baseUrl:'https://api.groq.com/openai/v1',model:'llama-3.3-70b-versatile'},
+  deepseek: {baseUrl:'https://api.deepseek.com/v1',model:'deepseek-chat'},
+  mistral: {baseUrl:'https://api.mistral.ai/v1',model:'mistral-small-latest'},
+  xai: {baseUrl:'https://api.x.ai/v1',model:'grok-3-mini'},
+  together: {baseUrl:'https://api.together.xyz/v1',model:'meta-llama/Llama-3.3-70B-Instruct-Turbo'},
+  fireworks: {baseUrl:'https://api.fireworks.ai/inference/v1',model:'accounts/fireworks/models/llama-v3p3-70b-instruct'},
+  cerebras: {baseUrl:'https://api.cerebras.ai/v1',model:'llama-3.3-70b'},
+  sambanova: {baseUrl:'https://api.sambanova.ai/v1',model:'Meta-Llama-3.3-70B-Instruct'},
+  nvidia: {baseUrl:'https://integrate.api.nvidia.com/v1',model:'meta/llama-3.3-70b-instruct'},
+  huggingface: {baseUrl:'https://router.huggingface.co/v1',model:'meta-llama/Llama-3.3-70B-Instruct'},
+  localai: {baseUrl:'http://127.0.0.1:8080/v1',model:'gpt-4'},
+  vllm: {baseUrl:'http://127.0.0.1:8000/v1',model:'local-model'},
+  llamacpp: {baseUrl:'http://127.0.0.1:8080/v1',model:'local-model'},
+  koboldcpp: {baseUrl:'http://127.0.0.1:5001/v1',model:'koboldcpp'},
+  'anthropic-compatible': {baseUrl:'http://127.0.0.1:20128/v1',model:'anthropic/claude-sonnet'},
+  'gemini-compatible': {baseUrl:'http://127.0.0.1:20128/v1',model:'google/gemini-2.5-flash'}
+};
 function joinUrl(base: string, suffix: string): string { return base.replace(/\/+$/, '') + '/' + suffix.replace(/^\/+/, ''); }
 function authHeaders(key: string): Record<string,string> { return key ? { Authorization: 'Bearer ' + key } : {}; }
 async function checkedJson(response: Response): Promise<any> {
@@ -208,20 +249,18 @@ function safeWorkspaceUri(root: vscode.Uri, relative: string): vscode.Uri {
 }
 
 async function chat(text: string, history: ChatMessage[]): Promise<string> {
-  const provider = cfg().get<string>('provider', 'ollama');
+  const provider = cfg().get<string>('provider', 'ollama-local');
   const system = 'You are NekoSune Codex, a coding and research assistant inside VS Code. You can inspect the workspace, search files, research the web, and create or replace files using tools. Before writing, explain what you intend to change; the write tool will ask the user for approval. Never claim a change succeeded unless the tool confirms it. Prefer small, relevant edits and suggest validation steps.';
   const transcript: any[] = [{role:'system',content:system}, ...history.slice(-20)];
-  const base = provider === 'ollama'
-    ? cfg().get<string>('ollama.baseUrl', 'http://127.0.0.1:11434')
-    : cfg().get<string>('api.baseUrl', 'http://127.0.0.1:20128/v1');
-  const model = provider === 'ollama'
-    ? cfg().get<string>('ollama.model', 'qwen2.5-coder:7b')
-    : cfg().get<string>('api.model', 'openai/gpt-4.1-mini');
+  const localOllama = provider === 'ollama-local';
+  const preset = platformPresets[provider as PlatformId];
+  const base = localOllama ? cfg().get<string>('ollama.baseUrl', 'http://127.0.0.1:11434') : cfg().get<string>('api.baseUrl', preset?.baseUrl || 'http://127.0.0.1:20128/v1');
+  const model = localOllama ? cfg().get<string>('ollama.model', 'qwen2.5-coder:7b') : cfg().get<string>('api.model', preset?.model || 'local-model');
   const key = cfg().get<string>('apiKey', '');
 
   for (let turn = 0; turn < 6; turn++) {
     let data: any;
-    if (provider === 'ollama') {
+    if (localOllama) {
       data = await checkedJson(await fetch(joinUrl(base, '/api/chat'), {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({model, stream:false, messages:transcript, tools:agentTools})
@@ -289,7 +328,8 @@ async function searchWeb(query: string): Promise<string> {
 async function generateImage(prompt: string): Promise<{data?:string;mimeType?:string;url?:string}> {
   const c = cfg();
   if (!c.get<boolean>('images.enabled',true)) throw new Error('Image generation is disabled in Settings.');
-  const base = c.get<string>('api.baseUrl','http://127.0.0.1:20128/v1');
+  const selected = c.get<string>('provider','ollama-local');
+  const base = selected === 'ollama-local' ? c.get<string>('ollama.baseUrl','http://127.0.0.1:11434') : c.get<string>('api.baseUrl',platformPresets[selected as PlatformId]?.baseUrl || 'http://127.0.0.1:20128/v1');
   const key = c.get<string>('apiKey','');
   const model = c.get<string>('images.model','openai/gpt-image-2');
   const response = await fetch(joinUrl(base,'/images/generations'), {method:'POST',headers:{'Content-Type':'application/json',...authHeaders(key)},body:JSON.stringify({model,prompt,n:1,size:'1024x1024',response_format:'b64_json'})});
