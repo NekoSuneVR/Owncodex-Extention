@@ -116,22 +116,132 @@ async function checkedJson(response: Response): Promise<any> {
   try { return JSON.parse(body); } catch { throw new Error('Service returned non-JSON response: ' + body.slice(0, 500)); }
 }
 
+type AgentTool = { type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } };
+const agentTools: AgentTool[] = [
+  { type:'function', function:{ name:'list_workspace_files', description:'List files in the current VS Code workspace. Use a glob pattern such as **/*.ts or **/*.', parameters:{type:'object',properties:{pattern:{type:'string',description:'Glob pattern; default **/*'}},required:[]} } },
+  { type:'function', function:{ name:'read_file', description:'Read a UTF-8 text file in the current workspace using a relative path.', parameters:{type:'object',properties:{path:{type:'string',description:'Workspace-relative file path'}},required:['path']} } },
+  { type:'function', function:{ name:'search_workspace', description:'Search text in workspace files and return matching file paths and line numbers.', parameters:{type:'object',properties:{query:{type:'string'},pattern:{type:'string',description:'Optional glob pattern, e.g. **/*.ts'}},required:['query']} } },
+  { type:'function', function:{ name:'write_file', description:'Create or replace a UTF-8 workspace file. Always explain the proposed change and ask the user for approval before writing.', parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string',description:'Complete new file contents'}},required:['path','content']} } },
+  { type:'function', function:{ name:'web_search', description:'Search the web through the configured SearXNG, Firecrawl or custom search provider.', parameters:{type:'object',properties:{query:{type:'string'}},required:['query']} } }
+];
+
+async function runAgentTool(name: string, args: any): Promise<string> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) return 'No workspace is open. Open a folder in VS Code first.';
+  const root = folders[0].uri;
+  if (name === 'list_workspace_files') {
+    const pattern = typeof args.pattern === 'string' && args.pattern ? args.pattern : '**/*';
+    const uris = await vscode.workspace.findFiles(pattern, '**/{node_modules,.git,out,dist,.next}/**', 250);
+    return uris.map(uri => vscode.workspace.asRelativePath(uri)).join('\n') || 'No files matched.';
+  }
+  if (name === 'read_file') {
+    const relative = String(args.path || '');
+    const target = safeWorkspaceUri(root, relative);
+    const bytes = await vscode.workspace.fs.readFile(target);
+    return Buffer.from(bytes).toString('utf8').slice(0, 30000);
+  }
+  if (name === 'search_workspace') {
+    const query = String(args.query || '').toLowerCase();
+    if (!query) return 'Search query is empty.';
+    const pattern = typeof args.pattern === 'string' && args.pattern ? args.pattern : '**/*';
+    const uris = await vscode.workspace.findFiles(pattern, '**/{node_modules,.git,out,dist,.next}/**', 250);
+    const hits: string[] = [];
+    for (const uri of uris) {
+      try {
+        const text = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+        if (text.includes('\0')) continue;
+        text.split(/\r?\n/).forEach((line, index) => {
+          if (line.toLowerCase().includes(query)) hits.push(vscode.workspace.asRelativePath(uri) + ':' + (index + 1) + ': ' + line.trim().slice(0, 400));
+        });
+      } catch { /* Ignore binary and unreadable files. */ }
+      if (hits.length >= 80) break;
+    }
+    return hits.join('\n') || 'No matches found.';
+  }
+  if (name === 'write_file') {
+    const relative = String(args.path || '');
+    const target = safeWorkspaceUri(root, relative);
+    const existing = await vscode.workspace.fs.readFile(target).then(bytes => Buffer.from(bytes).toString('utf8')).catch(() => undefined);
+    const preview = String(args.content ?? '');
+    if (preview.length > 200000) return 'Write refused: file exceeds the 200 KB safety limit.';
+    const approvalRequired = cfg().get<boolean>('agent.requireApprovalForEdits', true);
+    if (approvalRequired) {
+      const action = await vscode.window.showWarningMessage(
+        'NekoSune Codex wants to ' + (existing === undefined ? 'create' : 'replace') + ' ' + relative + '. Review the change before continuing.',
+        { modal: true, detail: 'New content: ' + preview.slice(0, 1600) + (preview.length > 1600 ? '\n… preview truncated …' : '') },
+        'Apply file change'
+      );
+      if (action !== 'Apply file change') return 'User declined the file write. Do not retry unless the user explicitly asks.';
+    }
+    await vscode.workspace.fs.writeFile(target, Buffer.from(preview, 'utf8'));
+    return 'File saved: ' + relative + (existing === undefined ? ' (created)' : ' (replaced)') + '.';
+  }
+  if (name === 'web_search') return await searchWeb(String(args.query || ''));
+  return 'Unknown tool: ' + name;
+}
+
+function safeWorkspaceUri(root: vscode.Uri, relative: string): vscode.Uri {
+  if (!relative || path.isAbsolute(relative) || relative.includes('\0')) throw new Error('A safe workspace-relative path is required.');
+  const normalized = path.normalize(relative);
+  if (normalized === '..' || normalized.startsWith('..' + path.sep)) throw new Error('Path escapes the workspace.');
+  const target = vscode.Uri.joinPath(root, normalized);
+  const rootPath = path.resolve(root.fsPath);
+  const targetPath = path.resolve(target.fsPath);
+  if (targetPath !== rootPath && !targetPath.startsWith(rootPath + path.sep)) throw new Error('Path escapes the workspace.');
+  return target;
+}
+
 async function chat(text: string, history: ChatMessage[]): Promise<string> {
   const provider = cfg().get<string>('provider', 'ollama');
-  const system = 'You are NekoSune Codex, a helpful coding and research assistant inside VS Code. Be clear and practical. Do not claim to have edited files or run commands unless a tool actually did so. When suggesting code changes, name the files and explain how to validate them.';
-  if (provider === 'ollama') {
-    const base = cfg().get<string>('ollama.baseUrl', 'http://127.0.0.1:11434');
-    const model = cfg().get<string>('ollama.model', 'qwen2.5-coder:7b');
-    const response = await fetch(joinUrl(base, '/api/chat'), { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({model, stream:false, messages:[{role:'system',content:system}, ...history.slice(-20)]}) });
-    const data = await checkedJson(response);
-    return data.message?.content ?? 'Ollama returned an empty response.';
-  }
-  const base = cfg().get<string>('api.baseUrl', 'http://127.0.0.1:20128/v1');
-  const model = cfg().get<string>('api.model', 'openai/gpt-4.1-mini');
+  const system = 'You are NekoSune Codex, a coding and research assistant inside VS Code. You can inspect the workspace, search files, research the web, and create or replace files using tools. Before writing, explain what you intend to change; the write tool will ask the user for approval. Never claim a change succeeded unless the tool confirms it. Prefer small, relevant edits and suggest validation steps.';
+  const transcript: any[] = [{role:'system',content:system}, ...history.slice(-20)];
+  const base = provider === 'ollama'
+    ? cfg().get<string>('ollama.baseUrl', 'http://127.0.0.1:11434')
+    : cfg().get<string>('api.baseUrl', 'http://127.0.0.1:20128/v1');
+  const model = provider === 'ollama'
+    ? cfg().get<string>('ollama.model', 'qwen2.5-coder:7b')
+    : cfg().get<string>('api.model', 'openai/gpt-4.1-mini');
   const key = cfg().get<string>('apiKey', '');
-  const response = await fetch(joinUrl(base, '/chat/completions'), { method:'POST', headers:{'Content-Type':'application/json', ...authHeaders(key)}, body:JSON.stringify({model, messages:[{role:'system',content:system}, ...history.slice(-20)], stream:false}) });
-  const data = await checkedJson(response);
-  return data.choices?.[0]?.message?.content ?? 'The model returned an empty response.';
+
+  for (let turn = 0; turn < 6; turn++) {
+    let data: any;
+    if (provider === 'ollama') {
+      data = await checkedJson(await fetch(joinUrl(base, '/api/chat'), {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model, stream:false, messages:transcript, tools:agentTools})
+      }));
+      const assistant = data.message ?? {};
+      const calls = assistant.tool_calls ?? [];
+      if (!calls.length) return assistant.content ?? 'Ollama returned an empty response.';
+      transcript.push(assistant);
+      for (const call of calls) {
+        const name = call.function?.name;
+        const rawArgs = call.function?.arguments ?? {};
+        const args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+        let result: string;
+        try { result = await runAgentTool(name, args); } catch (error) { result = 'Tool error: ' + (error instanceof Error ? error.message : String(error)); }
+        transcript.push({role:'tool', tool_name:name, content:result});
+      }
+    } else {
+      data = await checkedJson(await fetch(joinUrl(base, '/chat/completions'), {
+        method:'POST', headers:{'Content-Type':'application/json', ...authHeaders(key)},
+        body:JSON.stringify({model, messages:transcript, tools:agentTools, tool_choice:'auto', stream:false})
+      }));
+      const assistant = data.choices?.[0]?.message;
+      if (!assistant) throw new Error('The model returned no assistant message.');
+      const calls = assistant.tool_calls ?? [];
+      if (!calls.length) return typeof assistant.content === 'string' ? assistant.content : JSON.stringify(assistant.content ?? '');
+      transcript.push(assistant);
+      for (const call of calls) {
+        const name = call.function?.name;
+        const args = JSON.parse(call.function?.arguments || '{}');
+        let result: string;
+        try { result = await runAgentTool(name, args); } catch (error) { result = 'Tool error: ' + (error instanceof Error ? error.message : String(error)); }
+        transcript.push({role:'tool', tool_call_id:call.id, content:result});
+      }
+    }
+  }
+  return 'I reached the tool-call limit for this turn. Please ask me to continue or narrow the task.';
 }
 
 async function searchWeb(query: string): Promise<string> {
