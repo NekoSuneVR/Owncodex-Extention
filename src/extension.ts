@@ -8,7 +8,8 @@ type WebviewRequest =
   | { type: 'generateImage'; prompt: string }
   | { type: 'transcribe'; audioBase64: string; mimeType: string }
   | { type: 'speak'; text: string }
-  | { type: 'insertSelection' };
+  | { type: 'insertSelection' }
+  | { type: 'providerChanged'; provider: 'ollama' | 'omniroute' | 'openai-compatible' };
 
 class CodexViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
@@ -20,7 +21,10 @@ class CodexViewProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage(async (message: WebviewRequest) => {
       try {
-        if (message.type === 'chat') {
+        if (message.type === 'providerChanged') {
+          await cfg().update('provider', message.provider, vscode.ConfigurationTarget.Global);
+          view.webview.postMessage({ type: 'providerSaved', provider: message.provider });
+        } else if (message.type === 'chat') {
           const answer = await chat(message.text, message.history);
           view.webview.postMessage({ type: 'chatResult', text: answer });
         } else if (message.type === 'search') {
@@ -136,7 +140,7 @@ async function searchWeb(query: string): Promise<string> {
   if (provider === 'firecrawl') {
     const base = c.get<string>('firecrawl.baseUrl','http://127.0.0.1:3002');
     const key = c.get<string>('firecrawl.apiKey','');
-    const response = await fetch(joinUrl(base,'/v1/search'), {method:'POST',headers:{'Content-Type':'application/json',...authHeaders(key)},body:JSON.stringify({query,limit:5,scrapeOptions:{formats:['markdown']}})});
+    const response = await fetch(joinUrl(base,'/v2/search'), {method:'POST',headers:{'Content-Type':'application/json',...authHeaders(key)},body:JSON.stringify({query,limit:5,scrapeOptions:{formats:['markdown']}})});
     const data = await checkedJson(response);
     const results = data.data ?? data.results ?? [];
     return results.map((x:any,i:number)=>(i+1)+'. '+(x.title||x.url||'Result')+'\n'+(x.url||'')+'\n'+(x.description||x.markdown||x.content||'')).join('\n\n') || JSON.stringify(data).slice(0,5000);
