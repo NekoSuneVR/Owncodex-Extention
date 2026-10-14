@@ -198,8 +198,8 @@ async function runAgentTool(name: string, args: any): Promise<string> {
 
 function safeWorkspaceUri(root: vscode.Uri, relative: string): vscode.Uri {
   if (!relative || path.isAbsolute(relative) || relative.includes('\0')) throw new Error('A safe workspace-relative path is required.');
-  const normalized = path.normalize(relative);
-  if (normalized === '..' || normalized.startsWith('..' + path.sep)) throw new Error('Path escapes the workspace.');
+  const normalized = path.normalize(relative).split(path.sep).join('/');
+  if (normalized === '..' || normalized.startsWith('../')) throw new Error('Path escapes the workspace.');
   const target = vscode.Uri.joinPath(root, normalized);
   const rootPath = path.resolve(root.fsPath);
   const targetPath = path.resolve(target.fsPath);
