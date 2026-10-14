@@ -206,7 +206,9 @@ async function runAgentTool(name: string, args: any): Promise<string> {
   if (name === 'write_file') {
     const relative = String(args.path || '');
     const target = safeWorkspaceUri(root, relative);
-    const existing = await vscode.workspace.fs.readFile(target).then(bytes => Buffer.from(bytes).toString('utf8')).catch(() => undefined);
+    let existing: string | undefined;
+    try { existing = Buffer.from(await vscode.workspace.fs.readFile(target)).toString('utf8'); }
+    catch { existing = undefined; }
     const preview = String(args.content ?? '');
     if (preview.length > 200000) return 'Write refused: file exceeds the 200 KB safety limit.';
     const approvalRequired = cfg().get<boolean>('agent.requireApprovalForEdits', true);
