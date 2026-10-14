@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import { exec as execCallback } from 'node:child_process';
+import { promisify } from 'node:util';
+const execCommand = promisify(execCallback);
 
 type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 type WebviewRequest =
@@ -122,6 +125,7 @@ const agentTools: AgentTool[] = [
   { type:'function', function:{ name:'read_file', description:'Read a UTF-8 text file in the current workspace using a relative path.', parameters:{type:'object',properties:{path:{type:'string',description:'Workspace-relative file path'}},required:['path']} } },
   { type:'function', function:{ name:'search_workspace', description:'Search text in workspace files and return matching file paths and line numbers.', parameters:{type:'object',properties:{query:{type:'string'},pattern:{type:'string',description:'Optional glob pattern, e.g. **/*.ts'}},required:['query']} } },
   { type:'function', function:{ name:'write_file', description:'Create or replace a UTF-8 workspace file. Always explain the proposed change and ask the user for approval before writing.', parameters:{type:'object',properties:{path:{type:'string'},content:{type:'string',description:'Complete new file contents'}},required:['path','content']} } },
+  { type:'function', function:{ name:'run_terminal', description:'Run a shell command in the workspace to build, test, or inspect the project. Explain the command and obtain user approval first.', parameters:{type:'object',properties:{command:{type:'string',description:'Command to execute in the workspace root'}},required:['command']} } },
   { type:'function', function:{ name:'web_search', description:'Search the web through the configured SearXNG, Firecrawl or custom search provider.', parameters:{type:'object',properties:{query:{type:'string'}},required:['query']} } }
 ];
 
@@ -175,6 +179,18 @@ async function runAgentTool(name: string, args: any): Promise<string> {
     }
     await vscode.workspace.fs.writeFile(target, Buffer.from(preview, 'utf8'));
     return 'File saved: ' + relative + (existing === undefined ? ' (created)' : ' (replaced)') + '.';
+  }
+  if (name === 'run_terminal') {
+    const command = String(args.command || '').trim();
+    if (!command) return 'No terminal command supplied.';
+    if (command.length > 2000) return 'Command refused: it exceeds the 2,000-character safety limit.';
+    const approvalRequired = cfg().get<boolean>('agent.requireApprovalForTerminal', true);
+    if (approvalRequired) {
+      const action = await vscode.window.showWarningMessage('NekoSune Codex wants to run a terminal command.', { modal:true, detail:'Working directory: ' + root.fsPath + '\n\nCommand:\n' + command }, 'Run command');
+      if (action !== 'Run command') return 'User declined the terminal command. Do not retry unless the user explicitly asks.';
+    }
+    const result = await execCommand(command, { cwd:root.fsPath, timeout:120000, maxBuffer:1024*1024, windowsHide:true });
+    return 'Exit code: 0\nSTDOUT:\n' + (result.stdout || '(empty)') + '\nSTDERR:\n' + (result.stderr || '(empty)');
   }
   if (name === 'web_search') return await searchWeb(String(args.query || ''));
   return 'Unknown tool: ' + name;
