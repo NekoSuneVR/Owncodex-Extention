@@ -20,11 +20,11 @@
     "configuration": {
       "title": "NekoSune Codex",
       "properties": {
-        "nekosuneCodex.provider": { "type": "string", "enum": ["ollama", "omniroute", "openai-compatible"], "default": "ollama", "description": "Chat and coding model provider." },
+        "nekosuneCodex.provider": { "type": "string", "enum": ["ollama-local", "ollama-cloud", "lm-studio", "omniroute", "openai", "openrouter", "anthropic-compatible", "gemini-compatible", "groq", "deepseek", "mistral", "xai", "together", "fireworks", "cerebras", "sambanova", "nvidia", "huggingface", "localai", "vllm", "llamacpp", "koboldcpp", "custom"], "default": "ollama-local", "description": "Chat and coding model provider." },
         "nekosuneCodex.ollama.baseUrl": { "type": "string", "default": "http://127.0.0.1:11434", "description": "Ollama server URL." },
         "nekosuneCodex.ollama.model": { "type": "string", "default": "qwen2.5-coder:7b", "description": "Ollama model name." },
-        "nekosuneCodex.api.baseUrl": { "type": "string", "default": "http://127.0.0.1:20128/v1", "description": "OmniRoute or OpenAI-compatible API base URL." },
-        "nekosuneCodex.api.model": { "type": "string", "default": "openai/gpt-4.1-mini", "description": "Model ID accepted by the configured API gateway." },
+        "nekosuneCodex.api.baseUrl": { "type": "string", "default": "http://127.0.0.1:20128/v1", "description": "Active platform API base URL. The platform selector fills a sensible default; override it for your server." },
+        "nekosuneCodex.api.model": { "type": "string", "default": "openai/gpt-4.1-mini", "description": "Model ID for the selected platform. Choose a model supported by that service." },
         "nekosuneCodex.apiKey": { "type": "string", "default": "", "scope": "machine", "description": "API key for the configured gateway, if required. Prefer VS Code SecretStorage for sensitive production deployments." },
         "nekosuneCodex.search.provider": { "type": "string", "enum": ["searxng", "firecrawl", "custom"], "default": "searxng", "description": "Web search provider." },
         "nekosuneCodex.search.baseUrl": { "type": "string", "default": "http://127.0.0.1:8080", "description": "SearXNG base URL or custom search API URL." },
