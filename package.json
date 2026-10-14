@@ -1,0 +1,58 @@
+{
+  "name": "nekosune-codex",
+  "displayName": "NekoSune Codex",
+  "description": "A configurable AI chat and coding workspace for OmniRoute, Ollama, web search, images and local voice services.",
+  "version": "0.1.0",
+  "publisher": "nekosunevr",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI", "Other"],
+  "keywords": ["ollama", "omniroute", "coding-agent", "searxng", "firecrawl", "piper", "whisper", "vosk"],
+  "activationEvents": ["onView:nekosuneCodex.chat", "onCommand:nekosuneCodex.openChat"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": { "activitybar": [{ "id": "nekosuneCodex", "title": "NekoSune Codex", "icon": "media/icon.svg" }] },
+    "views": { "nekosuneCodex": [{ "id": "nekosuneCodex.chat", "name": "Chat", "type": "webview" }] },
+    "commands": [
+      { "command": "nekosuneCodex.openChat", "title": "NekoSune Codex: Open Chat" },
+      { "command": "nekosuneCodex.searchWorkspace", "title": "NekoSune Codex: Search Workspace" }
+    ],
+    "configuration": {
+      "title": "NekoSune Codex",
+      "properties": {
+        "nekosuneCodex.provider": { "type": "string", "enum": ["ollama", "omniroute", "openai-compatible"], "default": "ollama", "description": "Chat and coding model provider." },
+        "nekosuneCodex.ollama.baseUrl": { "type": "string", "default": "http://127.0.0.1:11434", "description": "Ollama server URL." },
+        "nekosuneCodex.ollama.model": { "type": "string", "default": "qwen2.5-coder:7b", "description": "Ollama model name." },
+        "nekosuneCodex.api.baseUrl": { "type": "string", "default": "http://127.0.0.1:20128/v1", "description": "OmniRoute or OpenAI-compatible API base URL." },
+        "nekosuneCodex.api.model": { "type": "string", "default": "openai/gpt-4.1-mini", "description": "Model ID accepted by the configured API gateway." },
+        "nekosuneCodex.apiKey": { "type": "string", "default": "", "scope": "machine", "description": "API key for the configured gateway, if required. Prefer VS Code SecretStorage for sensitive production deployments." },
+        "nekosuneCodex.search.provider": { "type": "string", "enum": ["searxng", "firecrawl", "custom"], "default": "searxng", "description": "Web search provider." },
+        "nekosuneCodex.search.baseUrl": { "type": "string", "default": "http://127.0.0.1:8080", "description": "SearXNG base URL or custom search API URL." },
+        "nekosuneCodex.firecrawl.baseUrl": { "type": "string", "default": "http://127.0.0.1:3002", "description": "Firecrawl server URL." },
+        "nekosuneCodex.firecrawl.apiKey": { "type": "string", "default": "", "scope": "machine", "description": "Firecrawl API key, if required by your deployment." },
+        "nekosuneCodex.search.customPath": { "type": "string", "default": "/search", "description": "Path for a custom search API." },
+        "nekosuneCodex.voice.transcriptionUrl": { "type": "string", "default": "http://127.0.0.1:9000/v1/audio/transcriptions", "description": "OpenAI-compatible transcription endpoint (Whisper-compatible or proxy)." },
+        "nekosuneCodex.voice.transcriptionProvider": { "type": "string", "enum": ["openai-compatible", "vosk-http"], "default": "openai-compatible", "description": "Transcription server protocol. Vosk HTTP adapters may require a compatible wrapper." },
+        "nekosuneCodex.voice.transcriptionModel": { "type": "string", "default": "whisper-1", "description": "Model field sent to OpenAI-compatible transcription endpoints." },
+        "nekosuneCodex.voice.ttsUrl": { "type": "string", "default": "http://127.0.0.1:5000", "description": "Piper HTTP service URL or OpenAI-compatible /v1/audio/speech endpoint." },
+        "nekosuneCodex.voice.ttsMode": { "type": "string", "enum": ["piper-http", "openai-compatible"], "default": "piper-http", "description": "Piper HTTP wrapper or OpenAI-compatible speech endpoint." },
+        "nekosuneCodex.voice.ttsVoice": { "type": "string", "default": "en_GB-alan-medium", "description": "Voice name for the configured TTS service." },
+        "nekosuneCodex.images.enabled": { "type": "boolean", "default": true, "description": "Enable image generation through the configured API gateway." },
+        "nekosuneCodex.images.model": { "type": "string", "default": "openai/gpt-image-2", "description": "Image model ID supported by the configured gateway." },
+        "nekosuneCodex.agent.requireApprovalForEdits": { "type": "boolean", "default": true, "description": "Require confirmation before applying AI-proposed file changes." },
+        "nekosuneCodex.agent.requireApprovalForTerminal": { "type": "boolean", "default": true, "description": "Require confirmation before running terminal commands." }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}
