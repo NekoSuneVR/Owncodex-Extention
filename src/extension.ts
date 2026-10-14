@@ -27,7 +27,7 @@ class CodexViewProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage(async (message: WebviewRequest) => {
       try {
         if ((message as any).type === 'ready') {
-          view.webview.postMessage({ type:'initialSettings', provider:cfg().get<string>('provider','ollama-local'), transcriptionProvider:cfg().get<string>('voice.transcriptionProvider','openai-compatible'), ttsMode:cfg().get<string>('voice.ttsMode','piper-http') });
+          view.webview.postMessage({ type:'initialSettings', provider:(cfg().get<string>('provider','ollama-local') === 'ollama' ? 'ollama-local' : cfg().get<string>('provider','ollama-local') === 'openai-compatible' ? 'custom' : cfg().get<string>('provider','ollama-local')), transcriptionProvider:cfg().get<string>('voice.transcriptionProvider','openai-compatible'), ttsMode:cfg().get<string>('voice.ttsMode','piper-http') });
         } else if (message.type === 'providerChanged') {
           await cfg().update('provider', message.provider, vscode.ConfigurationTarget.Global);
           const preset = platformPresets[message.provider];
@@ -249,7 +249,8 @@ function safeWorkspaceUri(root: vscode.Uri, relative: string): vscode.Uri {
 }
 
 async function chat(text: string, history: ChatMessage[]): Promise<string> {
-  const provider = cfg().get<string>('provider', 'ollama-local');
+  const storedProvider = cfg().get<string>('provider', 'ollama-local');
+  const provider = storedProvider === 'ollama' ? 'ollama-local' : storedProvider === 'openai-compatible' ? 'custom' : storedProvider;
   const system = 'You are NekoSune Codex, a coding and research assistant inside VS Code. You can inspect the workspace, search files, research the web, and create or replace files using tools. Before writing, explain what you intend to change; the write tool will ask the user for approval. Never claim a change succeeded unless the tool confirms it. Prefer small, relevant edits and suggest validation steps.';
   const transcript: any[] = [{role:'system',content:system}, ...history.slice(-20)];
   const localOllama = provider === 'ollama-local';
@@ -328,11 +329,13 @@ async function searchWeb(query: string): Promise<string> {
 async function generateImage(prompt: string): Promise<{data?:string;mimeType?:string;url?:string}> {
   const c = cfg();
   if (!c.get<boolean>('images.enabled',true)) throw new Error('Image generation is disabled in Settings.');
-  const selected = c.get<string>('provider','ollama-local');
+  const savedProvider = c.get<string>('provider','ollama-local');
+  const selected = savedProvider === 'ollama' ? 'ollama-local' : savedProvider === 'openai-compatible' ? 'custom' : savedProvider;
   const base = selected === 'ollama-local' ? c.get<string>('ollama.baseUrl','http://127.0.0.1:11434') : c.get<string>('api.baseUrl',platformPresets[selected as PlatformId]?.baseUrl || 'http://127.0.0.1:20128/v1');
   const key = c.get<string>('apiKey','');
   const model = c.get<string>('images.model','openai/gpt-image-2');
-  const response = await fetch(joinUrl(base,'/images/generations'), {method:'POST',headers:{'Content-Type':'application/json',...authHeaders(key)},body:JSON.stringify({model,prompt,n:1,size:'1024x1024',response_format:'b64_json'})});
+  const imagePath = selected === 'ollama-local' ? '/v1/images/generations' : '/images/generations';
+  const response = await fetch(joinUrl(base,imagePath), {method:'POST',headers:{'Content-Type':'application/json',...authHeaders(key)},body:JSON.stringify({model,prompt,n:1,size:'1024x1024',response_format:'b64_json'})});
   const data = await checkedJson(response);
   const image = data.data?.[0];
   if (image?.b64_json) return {data:image.b64_json,mimeType:'image/png'};
@@ -376,6 +379,9 @@ async function speak(text: string): Promise<{data:string;mimeType:string}> {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  const legacyProvider = cfg().get<string>('provider');
+  if (legacyProvider === 'ollama') void cfg().update('provider', 'ollama-local', vscode.ConfigurationTarget.Global);
+  else if (legacyProvider === 'openai-compatible') void cfg().update('provider', 'custom', vscode.ConfigurationTarget.Global);
   const provider = new CodexViewProvider(context);
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('nekosuneCodex.chat',provider));
   context.subscriptions.push(vscode.commands.registerCommand('nekosuneCodex.openChat',async()=>{await vscode.commands.executeCommand('workbench.view.extension.nekosuneCodex');}));
