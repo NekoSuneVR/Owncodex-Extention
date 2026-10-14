@@ -11,9 +11,11 @@ A VS Code extension project for configurable AI chat, coding assistance, image g
 - Speech transcription via an OpenAI-compatible `/v1/audio/transcriptions` endpoint or a configurable Vosk-style HTTP wrapper.
 - Text-to-speech via a Piper HTTP wrapper or OpenAI-compatible `/v1/audio/speech`.
 - A VS Code sidebar with chat, microphone recording, read-aloud, web search and image generation controls.
-- Workspace text search command.
+- Coding tools for listing, reading and searching workspace files, with approval-gated file writes.
+- An approval-gated terminal tool for build/test commands, executed from the workspace root.
+- A workspace text search command.
 
-This is an initial scaffold, not yet a full autonomous coding agent. Safe patch review/application, agent tool-calling, streaming, durable conversation history, image editing, and robust provider-specific audio adapters are follow-up work. The extension currently does not run terminal commands or autonomously modify workspace files.
+This is an initial scaffold, not yet a full autonomous coding agent. Diff-based patch review/application, streaming, durable conversation history, image editing, and robust provider-specific audio adapters are follow-up work. File writes and terminal commands require explicit approval by default; review each proposed change and command before accepting it.
 
 ## Requirements
 
